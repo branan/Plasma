@@ -288,6 +288,30 @@ bool plMoviePlayer::IOpenMovie()
 #endif
 }
 
+static uint8_t Clip(int32_t val) {
+    if (val < 0) {
+        return 0;
+    } else if (val > 255) {
+        return 255;
+    }
+    return static_cast<uint8_t>(val);
+}
+
+#define YG 74 /* static_cast<int8>(1.164 * 64 + 0.5) */
+
+#define UB 127 /* min(63,static_cast<int8>(2.018 * 64)) */
+#define UG -25 /* static_cast<int8>(-0.391 * 64 - 0.5) */
+#define UR 0
+
+#define VB 0
+#define VG -52 /* static_cast<int8>(-0.813 * 64 - 0.5) */
+#define VR 102 /* static_cast<int8>(1.596 * 64 + 0.5) */
+
+// Bias
+#define BB UB * 128 + VB * 128
+#define BG UG * 128 + VG * 128
+#define BR UR * 128 + VR * 128
+
 bool plMoviePlayer::IProcessVideoFrame(const blkbuf_t& data)
 {
     uint8_t* buf = std::get<0>(data).get();
@@ -295,16 +319,25 @@ bool plMoviePlayer::IProcessVideoFrame(const blkbuf_t& data)
     vpx_image_t* img = fVpx->Decode(buf, static_cast<uint32_t>(size));
     if (img)
     {
-        // gigantic fixme
+        // gigantic fixme. This currently contains a bunch of stuff that should be
+        // abstracted, and only works for planar YUV420 data.
         uint8_t* dst = static_cast<uint8_t*>(fTexture->GetImage());
-        uint8_t* src = static_cast<uint8_t*>(img->planes[0]);
+        uint8_t* y_src = static_cast<uint8_t*>(img->planes[0]);
+        uint8_t* u_src = static_cast<uint8_t*>(img->planes[1]);
+        uint8_t* v_src = static_cast<uint8_t*>(img->planes[2]);
         for(size_t i = 0; i < img->d_h; ++i) {
             for(size_t j = 0; j < img->d_w; ++j) {
-                size_t src_idx = img->w*i+j;
+                size_t y_idx = img->stride[0]*i+j;
+                size_t u_idx = img->stride[1]*(i/2)+(j/2);
+                size_t v_idx = img->stride[2]*(i/2)+(j/2);
                 size_t dst_idx = img->d_w*i+j;
-                dst[dst_idx*4+0] = src[src_idx];
-                dst[dst_idx*4+1] = src[src_idx];
-                dst[dst_idx*4+2] = src[src_idx];
+                int32_t y = static_cast<int32_t>(y_src[y_idx]);
+                int32_t u = static_cast<int32_t>(u_src[u_idx]);
+                int32_t v = static_cast<int32_t>(v_src[v_idx]);
+                int32_t y1 = (y - 16) * YG;
+                dst[dst_idx*4+0] = Clip(((u * UB + v * VB) - (BB) + y1) >> 6);
+                dst[dst_idx*4+1] = Clip(((u * UG + v * VG) - (BG) + y1) >> 6);
+                dst[dst_idx*4+2] = Clip(((u * UR + v * VR) - (BR) + y1) >> 6);
                 dst[dst_idx*4+3] = 0xff;
             }
         }
